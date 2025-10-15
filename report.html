@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Digital Dispo Dashboard (Diag)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --brand: #007bff; --overlay: rgba(0,0,0,0.6);
+      --card:#111; --text:#fff; --bar:#00bcd4; --bg:#f9f9f9;
+    }
+    html, body { margin:0; padding:0; height:100%; background:var(--bg);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+    .viewport { position:relative; height:100vh; width:100%; overflow:hidden; }
+    iframe { border:none; width:100%; height:100%; display:block; }
+
+    .refresh-btn{
+      position:fixed; right:20px; bottom:20px; z-index:10000;
+      background:var(--brand); color:#fff; border:none; border-radius:999px;
+      padding:14px 18px; font-size:16px; cursor:pointer; box-shadow:0 8px 24px rgba(0,0,0,.2);
+    }
+    .refresh-btn:disabled{opacity:.6; cursor:not-allowed;}
+
+    .overlay{
+      position:fixed; inset:0; background:var(--overlay);
+      display:none; align-items:center; justify-content:center; z-index:999999; /* HUGE */
+    }
+    .overlay.active{ display:flex; }
+    .card{ width:min(520px,92vw); background:var(--card); color:var(--text);
+      border-radius:14px; padding:24px; box-shadow:0 12px 40px rgba(0,0,0,.35); text-align:center; }
+    .progress-wrap{ width:100%; background:#222; border-radius:10px; overflow:hidden; height:12px; }
+    .progress-bar{ width:0%; height:100%; background:var(--bar); transition:width .25s linear; }
+    .eta{ margin-top:10px; font-size:13px; color:#cfcfcf; }
+    .no-pointer{ pointer-events:none; }
+  </style>
+</head>
+<body>
+  <div class="viewport">
+    <iframe id="pbi-frame"
+      title="Digital Dispo Dashboards v3 - Dev - Refresh Enhancements"
+      src="https://app.powerbi.com/reportEmbed?reportId=8160e2db-de87-4526-8b8e-c488f10d8b89&autoAuth=true&ctid=d1c56a60-dcf2-4ba0-8d19-e41646e6ead8&navContentPaneEnabled=false&filterPaneEnabled=false">
+    </iframe>
+  </div>
+
+  <!-- Button: include inline onclick as a backstop -->
+  <button id="refreshBtn" class="refresh-btn" title="Refresh data" onclick="doRefreshFlow()">Refresh data</button>
+
+  <div id="overlay" class="overlay" aria-hidden="true">
+    <div class="card">
+      <h2>Refreshing your report…</h2>
+      <p>Starting dataset refresh and then reloading the report.</p>
+      <div class="progress-wrap"><div id="progressBar" class="progress-bar"></div></div>
+      <div id="eta" class="eta">~30s remaining</div>
+    </div>
+  </div>
+
+  <script>
+    // ====== CONFIG ======
+    const MAKE_WEBHOOK_URL = 'https://hook.us2.make.com/vchvhpyeukqgd5tyl6o3r1wf6cstb4j8';
+    const REFRESH_DURATION_MS = 30000;
+    // ====================
+
+    const refreshBtn  = document.getElementById('refreshBtn');
+    const overlay     = document.getElementById('overlay');
+    const progressBar = document.getElementById('progressBar');
+    const etaEl       = document.getElementById('eta');
+    const frame       = document.getElementById('pbi-frame');
+
+    window.onerror = (msg, src, line, col, err) => {
+      console.error('JS error:', msg, src, line, col, err);
+    };
+
+    function showOverlay() {
+      console.log('showOverlay()');
+      overlay.classList.add('active');
+      overlay.setAttribute('aria-hidden','false');
+      frame.classList.add('no-pointer');
+      // Failsafe toast if it somehow isn't visible within 100ms
+      setTimeout(() => {
+        const visible = getComputedStyle(overlay).display !== 'none';
+        if (!visible) alert('Overlay not visible (check z-index/CSS).');
+      }, 100);
+    }
+    function hideOverlay() {
+      console.log('hideOverlay()');
+      overlay.classList.remove('active');
+      overlay.setAttribute('aria-hidden','true');
+      frame.classList.remove('no-pointer');
+    }
+
+    function animateProgress(durationMs) {
+      console.log('animateProgress() start', durationMs);
+      progressBar.style.width = '0%';
+      const start = performance.now();
+      return new Promise((resolve) => {
+        const tick = (now) => {
+          const elapsed = now - start;
+          const pct = Math.min(100, (elapsed / durationMs) * 100);
+          progressBar.style.width = pct.toFixed(2) + '%';
+          const remaining = Math.max(0, Math.ceil((durationMs - elapsed) / 1000));
+          etaEl.textContent = `~${remaining}s remaining`;
+          if (elapsed >= durationMs) { console.log('animateProgress() done'); resolve(); }
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+    }
+
+    function triggerMakeWebhook() {
+      console.log('triggerMakeWebhook() POST →', MAKE_WEBHOOK_URL);
+      try {
+        fetch(MAKE_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source: 'digital-dispo-report', action: 'refresh_request', ts: Date.now() })
+        }).then(r => console.log('Make webhook status:', r.status))
+          .catch(e => console.warn('Make webhook fetch error:', e));
+      } catch (e) {
+        console.warn('Make webhook try/catch error:', e);
+      }
+    }
+
+    function reloadIframeWithCacheBuster() {
+      console.log('reloadIframeWithCacheBuster()');
+      const url = new URL(frame.src);
+      url.searchParams.set('_ts', Date.now().toString());
+      frame.src = url.toString();
+    }
+
+    async function doRefreshFlow() {
+      try {
+        if (refreshBtn.disabled) return;
+        console.log('doRefreshFlow() start');
+        refreshBtn.disabled = true;
+        showOverlay();
+        triggerMakeWebhook();
+        await animateProgress(REFRESH_DURATION_MS);
+        reloadIframeWithCacheBuster();
+        setTimeout(() => {
+          hideOverlay();
+          refreshBtn.disabled = false;
+          console.log('doRefreshFlow() complete');
+        }, 1500);
+      } catch (e) {
+        console.error('doRefreshFlow() error', e);
+        refreshBtn.disabled = false;
+        hideOverlay();
+        alert('Refresh flow failed. Check console.');
+      }
+    }
+
+    // second binding (in addition to inline onclick) to be extra sure
+    refreshBtn.addEventListener('click', (e) => {
+      console.log('refreshBtn clicked (listener)');
+      doRefreshFlow();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        console.log('Keyboard R pressed');
+        doRefreshFlow();
+      }
+    });
+  </script>
+</body>
+</html>
