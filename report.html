@@ -186,7 +186,8 @@
     setTimeout(()=>{ hideOverlay(); refreshBtn.disabled = false; }, 800);
   }
 }
-
+refreshBtn.addEventListener('click', refreshAndStayOnSamePage);
+    
     // bootstrap
     embedReport().catch(err => {
       console.error('Embed failed:', err);
