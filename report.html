@@ -20,7 +20,7 @@
 
   <!-- Power BI JS SDK -->
   <script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.js"></script>
-  <!-- MSAL served locally -->
+  <!-- MSAL served locally (you uploaded this to /vendor) -->
   <script src="./vendor/msal-browser.min.js"></script>
 </head>
 
@@ -49,7 +49,7 @@
     const EMBED_URL =
       `https://app.powerbi.com/reportEmbed?reportId=${REPORT_ID}&ctid=${TENANT_ID}&navContentPaneEnabled=false&filterPaneEnabled=false`;
 
-    // ===== MSAL (Auth code flow for SPA) =====
+    // ===== MSAL (v3 requires initialize() first) =====
     const msalInstance = new msal.PublicClientApplication({
       auth: {
         clientId: CLIENT_ID,
@@ -61,17 +61,38 @@
     });
     const pbiScope = { scopes: ["https://analysis.windows.net/powerbi/api/.default"] };
 
+    async function initMsal() {
+      // v3 requirement
+      await msalInstance.initialize();
+
+      // handle redirect responses (if popup blocked we fall back to redirect)
+      const redirectResp = await msalInstance.handleRedirectPromise().catch(() => {});
+      if (redirectResp?.account) msalInstance.setActiveAccount(redirectResp.account);
+    }
+
     async function getAccessToken() {
-      const accts = msalInstance.getAllAccounts();
-      if (accts.length) {
+      await initMsal();
+
+      let account = msalInstance.getActiveAccount() || msalInstance.getAllAccounts()[0];
+
+      if (account) {
         try {
-          return (await msalInstance.acquireTokenSilent({ ...pbiScope, account: accts[0] })).accessToken;
-        } catch {}
+          const silent = await msalInstance.acquireTokenSilent({ ...pbiScope, account });
+          return silent.accessToken;
+        } catch { /* fall through to interactive */ }
       }
-      try { await msalInstance.loginPopup({ scopes: pbiScope.scopes }); }
-      catch { await msalInstance.loginRedirect({ scopes: pbiScope.scopes }); return new Promise(()=>{}); }
-      const acct = msalInstance.getAllAccounts()[0];
-      return (await msalInstance.acquireTokenSilent({ ...pbiScope, account: acct })).accessToken;
+
+      try {
+        await msalInstance.loginPopup({ scopes: pbiScope.scopes });
+      } catch {
+        // popup blocked → redirect flow
+        await msalInstance.loginRedirect({ scopes: pbiScope.scopes });
+        return new Promise(() => {}); // stop here; page will reload to redirect URI
+      }
+
+      account = msalInstance.getActiveAccount() || msalInstance.getAllAccounts()[0];
+      const res = await msalInstance.acquireTokenSilent({ ...pbiScope, account });
+      return res.accessToken;
     }
 
     // ===== Power BI embedding =====
@@ -80,7 +101,9 @@
       const accessToken = await getAccessToken();
       const models = window['powerbi-client'].models;
       const host = document.getElementById('host');
+
       powerbi.reset(host);
+
       const config = {
         type: 'report',
         tokenType: models.TokenType.Aad,
@@ -92,12 +115,13 @@
           navContentPaneEnabled: false
         }
       };
+
       report = powerbi.embed(host, config);
       report.on('error', e => console.error('PBI error:', e.detail));
       await report.loaded;
     }
 
-    // ===== Overlay + progress =====
+    // ===== Overlay + refresh flow =====
     const refreshBtn  = document.getElementById('refreshBtn');
     const overlay     = document.getElementById('overlay');
     const progressBar = document.getElementById('progressBar');
@@ -119,17 +143,24 @@
     }
 
     function triggerMake(){
-      fetch(MAKE_WEBHOOK_URL,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({source:'digital-dispo-report',action:'refresh_request',ts:Date.now()})}).catch(()=>{});
+      fetch(MAKE_WEBHOOK_URL,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({source:'digital-dispo-report',action:'refresh_request',ts:Date.now()})
+      }).catch(()=>{});
     }
 
     async function refreshAndStayOnSamePage() {
       refreshBtn.disabled = true; showOverlay();
       triggerMake();
-      const active = await report.getActivePage(); const pageName = active?.name;
+
+      const active = await report.getActivePage();
+      const pageName = active?.name;
+
       await animateProgress(REFRESH_DURATION_MS);
       await report.reload();
-      if (pageName) { await report.setPage(pageName); }
+      if (pageName) await report.setPage(pageName);
+
       setTimeout(()=>{ hideOverlay(); refreshBtn.disabled = false; }, 1200);
     }
 
@@ -138,7 +169,7 @@
     // bootstrap
     embedReport().catch(err => {
       console.error('Embed failed:', err);
-      alert('Power BI embed failed. Check console and your Azure AD app settings.');
+      alert('Power BI embed failed. Check console and Azure AD app settings.');
     });
   </script>
 </body>
