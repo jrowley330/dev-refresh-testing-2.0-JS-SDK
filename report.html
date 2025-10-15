@@ -176,12 +176,14 @@
 
     // fire webhook + progress
     triggerMake();
-    await animateProgress(REFRESH_DURATION_MS);
+    const progressP = animateProgress(REFRESH_DURATION_MS);
 
-    // reload and wait until ready
-    await report.reload();
-    await report.loaded;
+    // ✅ use refresh (keeps page + slicers; no auth round-trip)
+    await report.refresh();
+
+    // wait for a render after refresh, then for the bar to finish
     await waitRendered();
+    await progressP;
 
     // restore page safely
     if (pageName) {
