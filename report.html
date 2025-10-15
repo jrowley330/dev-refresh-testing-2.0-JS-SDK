@@ -151,55 +151,60 @@
     }
 
    async function refreshAndStayOnSamePage() {
-  // small helper: wait for next 'rendered'
-  const waitRendered = () => new Promise(res => {
-    const handler = () => { report.off('rendered', handler); res(); };
-    report.on('rendered', handler);
-  });
+  // wait for a full render event
+  const waitRendered = () =>
+    new Promise(res => {
+      const h = () => { report.off('rendered', h); res(); };
+      report.on('rendered', h);
+    });
 
   try {
     refreshBtn.disabled = true; showOverlay();
 
-    // ensure the report is fully ready now
+    // ensure current report is fully ready
     await report.loaded; 
     await waitRendered();
 
-    // 1) remember page + slicers/filters
+    // remember current page
     const active = await report.getActivePage();
     const pageName = active?.name;
-    let bookmarkBefore = null;
-    try { bookmarkBefore = await report.bookmarksManager.capture(); } catch {}
+    const pageDisplayName = active?.displayName;
 
-    // 2) trigger backend + progress
+    // (optional) capture filters only (skip bookmarks for now)
+    let filtersBefore = [];
+    try { filtersBefore = await report.getFilters(); } catch {}
+
+    // fire webhook + progress
     triggerMake();
     await animateProgress(REFRESH_DURATION_MS);
 
-    // 3) reload and wait until fully ready
+    // reload and wait until ready
     await report.reload();
     await report.loaded;
     await waitRendered();
 
-    // 4) restore page (by name, fallback by displayName) and activate it
+    // restore page safely
     if (pageName) {
       const pages = await report.getPages();
-      const byName = pages.find(p => p.name === pageName);
-      const byDisplay = pages.find(p => p.displayName === active.displayName);
-      const target = byName || byDisplay;
-      if (target) await target.setActive(); // safer than report.setPage(...)
+      const target =
+        pages.find(p => p.name === pageName) ||
+        pages.find(p => p.displayName === pageDisplayName);
+      if (target) await target.setActive();
     }
 
-    // 5) restore slicers/filters
-    if (bookmarkBefore?.state) {
-      await report.bookmarksManager.applyState(bookmarkBefore.state);
-      await waitRendered();
+    // restore report-level filters (keeps most slicer-driven filters if they’re report-level)
+    if (filtersBefore?.length) {
+      try { await report.setFilters(filtersBefore); await waitRendered(); } catch {}
     }
 
   } catch (e) {
     console.error('Refresh flow error:', e);
   } finally {
-    setTimeout(() => { hideOverlay(); refreshBtn.disabled = false; }, 800);
+    // always close the overlay
+    setTimeout(() => { hideOverlay(); refreshBtn.disabled = false; }, 600);
   }
 }
+
 
 refreshBtn.addEventListener('click', refreshAndStayOnSamePage);
     
