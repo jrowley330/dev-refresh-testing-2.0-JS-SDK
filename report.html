@@ -43,11 +43,12 @@
     const TENANT_ID = "d1c56a60-dcf2-4ba0-8d19-e41646e6ead8";
     const CLIENT_ID = "1ebcdc37-1524-4f55-ba28-38f69dc8a097";
     const REPORT_ID = "8160e2db-de87-4526-8b8e-c488f10d8b89";
+    const GROUP_ID = "43b12f71-b226-42d8-80dd-d53836451585";
     const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/vchvhpyeukqgd5tyl6o3r1wf6cstb4j8";
     const REFRESH_DURATION_MS = 30000;
 
-    const EMBED_URL =
-      `https://app.powerbi.com/reportEmbed?reportId=${REPORT_ID}&ctid=${TENANT_ID}&navContentPaneEnabled=false&filterPaneEnabled=false`;
+    const EMBED_URL = `https://app.powerbi.com/reportEmbed?reportId=${REPORT_ID}&groupId=${GROUP_ID}&ctid=${TENANT_ID}&navContentPaneEnabled=false&filterPaneEnabled=false`;
+
 
     // ===== MSAL (v3 requires initialize() first) =====
     const msalInstance = new msal.PublicClientApplication({
@@ -151,62 +152,70 @@
     }
 
    async function refreshAndStayOnSamePage() {
-  // wait for a full render event
-  const waitRendered = () =>
-    new Promise(res => {
-      const h = () => { report.off('rendered', h); res(); };
-      report.on('rendered', h);
-    });
+  // helpers
+  const waitRendered = () => new Promise(res => {
+    const h = () => { report.off('rendered', h); res(); };
+    report.on('rendered', h);
+  });
+  const withTimeout = (p, ms) =>
+    Promise.race([p, new Promise((_, rej)=> setTimeout(()=>rej(new Error('timeout')), ms))]);
 
   try {
-    refreshBtn.disabled = true; showOverlay();
+    refreshBtn.disabled = true;
+    showOverlay();
 
-    // ensure current report is fully ready
-    await report.loaded; 
-    await waitRendered();
-
-    // remember current page
-    const active = await report.getActivePage();
-    const pageName = active?.name;
-    const pageDisplayName = active?.displayName;
-
-    // (optional) capture filters only (skip bookmarks for now)
-    let filtersBefore = [];
-    try { filtersBefore = await report.getFilters(); } catch {}
-
-    // fire webhook + progress
-    triggerMake();
+    // start progress immediately so UI never "freezes"
     const progressP = animateProgress(REFRESH_DURATION_MS);
 
-    // ✅ use refresh (keeps page + slicers; no auth round-trip)
-    await report.refresh();
+    // best-effort remember the page (don’t block if not ready)
+    let pageName = null, pageDisplayName = null;
+    try {
+      const active = await withTimeout(report.getActivePage(), 1500);
+      pageName = active?.name; pageDisplayName = active?.displayName;
+    } catch {}
 
-    // wait for a render after refresh, then for the bar to finish
-    await waitRendered();
+    // ---- try a cheap in-place data refresh (no auth round-trip) ----
+    let refreshed = false;
+    try {
+      await withTimeout(report.refresh(), 15000); // refresh visuals
+      await withTimeout(waitRendered(), 10000);
+      refreshed = true;
+    } catch (e) {
+      console.warn('report.refresh() failed or timed out, falling back to reload:', e);
+    }
+
+    // ---- fallback: reload with a fresh token ----
+    if (!refreshed) {
+      try {
+        const newToken = await withTimeout(getAccessToken(), 15000);
+        await withTimeout(report.setAccessToken(newToken), 8000);
+        await withTimeout(report.reload(), 15000);
+        await withTimeout(waitRendered(), 10000);
+      } catch (e) {
+        console.error('reload path failed:', e);
+      }
+    }
+
+    // restore page if we captured it
+    if (pageName || pageDisplayName) {
+      try {
+        const pages = await withTimeout(report.getPages(), 4000);
+        const target = pages.find(p => p.name === pageName) ||
+                       pages.find(p => p.displayName === pageDisplayName);
+        if (target) await withTimeout(target.setActive(), 4000);
+      } catch {}
+    }
+
+    // wait for the progress to finish (if it already finished, resolves instantly)
     await progressP;
-
-    // restore page safely
-    if (pageName) {
-      const pages = await report.getPages();
-      const target =
-        pages.find(p => p.name === pageName) ||
-        pages.find(p => p.displayName === pageDisplayName);
-      if (target) await target.setActive();
-    }
-
-    // restore report-level filters (keeps most slicer-driven filters if they’re report-level)
-    if (filtersBefore?.length) {
-      try { await report.setFilters(filtersBefore); await waitRendered(); } catch {}
-    }
 
   } catch (e) {
     console.error('Refresh flow error:', e);
   } finally {
-    // always close the overlay
-    setTimeout(() => { hideOverlay(); refreshBtn.disabled = false; }, 600);
+    // ALWAYS close overlay
+    setTimeout(() => { hideOverlay(); refreshBtn.disabled = false; }, 400);
   }
 }
-
 
 refreshBtn.addEventListener('click', refreshAndStayOnSamePage);
     
