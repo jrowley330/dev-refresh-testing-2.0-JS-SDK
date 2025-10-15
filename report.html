@@ -151,41 +151,56 @@
     }
 
    async function refreshAndStayOnSamePage() {
+  // small helper: wait for next 'rendered'
+  const waitRendered = () => new Promise(res => {
+    const handler = () => { report.off('rendered', handler); res(); };
+    report.on('rendered', handler);
+  });
+
   try {
     refreshBtn.disabled = true; showOverlay();
 
-    // 1) remember page + full state (filters/slicers)
+    // ensure the report is fully ready now
+    await report.loaded; 
+    await waitRendered();
+
+    // 1) remember page + slicers/filters
     const active = await report.getActivePage();
     const pageName = active?.name;
-    const bookmarkBefore = await report.bookmarksManager.capture(); // captures filters + slicers
+    let bookmarkBefore = null;
+    try { bookmarkBefore = await report.bookmarksManager.capture(); } catch {}
 
-    // 2) trigger your backend + wait UI timer
+    // 2) trigger backend + progress
     triggerMake();
     await animateProgress(REFRESH_DURATION_MS);
 
-    // 3) reload and wait until fully loaded
+    // 3) reload and wait until fully ready
     await report.reload();
-    await report.loaded;               // ensure model + pages are ready
+    await report.loaded;
+    await waitRendered();
 
-    // 4) restore page (find by internal name, else by displayName)
+    // 4) restore page (by name, fallback by displayName) and activate it
     if (pageName) {
       const pages = await report.getPages();
-      let page = pages.find(p => p.name === pageName) ||
-                 pages.find(p => p.displayName === active.displayName);
-      if (page) await report.setPage(page.name);
+      const byName = pages.find(p => p.name === pageName);
+      const byDisplay = pages.find(p => p.displayName === active.displayName);
+      const target = byName || byDisplay;
+      if (target) await target.setActive(); // safer than report.setPage(...)
     }
 
-    // 5) restore state (filters/slicers) via bookmark
+    // 5) restore slicers/filters
     if (bookmarkBefore?.state) {
       await report.bookmarksManager.applyState(bookmarkBefore.state);
+      await waitRendered();
     }
 
   } catch (e) {
     console.error('Refresh flow error:', e);
   } finally {
-    setTimeout(()=>{ hideOverlay(); refreshBtn.disabled = false; }, 800);
+    setTimeout(() => { hideOverlay(); refreshBtn.disabled = false; }, 800);
   }
 }
+
 refreshBtn.addEventListener('click', refreshAndStayOnSamePage);
     
     // bootstrap
