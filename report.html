@@ -6,13 +6,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root { --brand:#007bff; --overlay:rgba(0,0,0,.6); --card:#111; --text:#fff; --bar:#00bcd4; --bg:#0b0b0b; }
-    html,body { margin:0; height:100%; background:#111; font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; }
-    #host { height:100vh; }
-    .refresh-btn { position:fixed; right:20px; bottom:20px; background:var(--brand); color:#fff; border:0; border-radius:999px; padding:14px 18px; font-size:16px; cursor:pointer; z-index:1000; box-shadow:0 8px 24px rgba(0,0,0,.2); }
+    html,body { margin:0; height:100%; background:#111; color:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; overflow:hidden; }
+    #host { height:100vh; overflow:hidden; }
+    #host iframe { width:100%; height:100%; border:0; display:block; }
+
+    .refresh-btn { position:fixed; right:20px; bottom:20px; background:var(--brand); color:#fff;
+      border:0; border-radius:999px; padding:14px 18px; font-size:16px; cursor:pointer;
+      z-index:1000; box-shadow:0 8px 24px rgba(0,0,0,.2); }
     .refresh-btn:disabled { opacity:.6; cursor:not-allowed; }
-    .overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:var(--overlay); z-index:999; }
+
+    .overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+      background:var(--overlay); z-index:999; }
     .overlay.active { display:flex; }
-    .card { width:min(520px,92vw); background:var(--card); color:var(--text); border-radius:14px; padding:24px; box-shadow:0 12px 40px rgba(0,0,0,.35); text-align:center; }
+    .card { width:min(520px,92vw); background:var(--card); color:var(--text); border-radius:14px;
+      padding:24px; box-shadow:0 12px 40px rgba(0,0,0,.35); text-align:center; }
     .progress-wrap { width:100%; background:#222; border-radius:10px; overflow:hidden; height:12px; }
     .progress-bar { width:0%; height:100%; background:var(--bar); transition:width .25s linear; }
     .eta { margin-top:10px; font-size:13px; color:#cfcfcf; }
@@ -20,7 +27,7 @@
 
   <!-- Power BI JS SDK -->
   <script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.js"></script>
-  <!-- MSAL served locally (you uploaded this to /vendor) -->
+  <!-- MSAL served locally -->
   <script src="./vendor/msal-browser.min.js"></script>
 </head>
 <body>
@@ -35,141 +42,114 @@
       <h2>Refreshing your report…</h2>
       <p>We’ll reload and return you to the same page.</p>
       <div class="progress-wrap"><div id="progressBar" class="progress-bar"></div></div>
-      <div id="eta" class="eta">~30s remaining</div>
+      <div id="eta" class="eta">~60s remaining</div>
     </div>
   </div>
 
   <script>
-    // ======= CONFIG (update IDs/URLs as needed) =======
-    const TENANT_ID  = "d1c56a60-dcf2-4ba0-8d19-e41646e6ead8";
-    const CLIENT_ID  = "1ebcdc37-1524-4f55-ba28-38f69dc8a097";
-    const REPORT_ID  = "8160e2db-de87-4526-8b8e-c488f10d8b89";
-    const GROUP_ID   = "43b12f71-b226-42d8-80dd-d53836451585";
+    // ======= CONFIG =======
+    const TENANT_ID   = "d1c56a60-dcf2-4ba0-8d19-e41646e6ead8";
+    const CLIENT_ID   = "1ebcdc37-1524-4f55-ba28-38f69dc8a097";
+    const REPORT_ID   = "8160e2db-de87-4526-8b8e-c488f10d8b89";
+    const GROUP_ID    = "43b12f71-b226-42d8-80dd-d53836451585";
     const REDIRECT_URI = "https://jrowley330.github.io/dev-refresh-testing-2.0-JS-SDK/report";
+
+    // Fire-and-forget webhook to Make (we're NOT awaiting completion here)
     const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/vchvhpyeukqgd5tyl6o3r1wf6cstb4j8";
 
-    // How long to show progress overlay (tune to your dataset refresh time)
-    const REFRESH_DURATION_MS = 60000;
+    // Timer-based grace window; adjust as needed
+    const REFRESH_DURATION_MS = 60000; // e.g., 45_000 or 60_000
 
     const EMBED_URL =
       `https://app.powerbi.com/reportEmbed?reportId=${REPORT_ID}` +
       `&groupId=${GROUP_ID}&ctid=${TENANT_ID}` +
       `&navContentPaneEnabled=false&filterPaneEnabled=false`;
 
-    // ======= MSAL: Redirect-only, Incognito-safe =======
+    // ======= MSAL (redirect-only; incognito-safe) =======
     const msalInstance = new msal.PublicClientApplication({
-      auth: {
-        clientId: CLIENT_ID,
-        authority: `https://login.microsoftonline.com/${TENANT_ID}`,
-        redirectUri: REDIRECT_URI
-      },
-      cache: {
-        cacheLocation: "localStorage",           // persist through reloads
-        storeAuthStateInCookie: true             // improves cross-browser/incognito reliability
-      },
-      system: {
-        navigateToLoginRequestUrl: false
-      }
+      auth: { clientId: CLIENT_ID, authority: `https://login.microsoftonline.com/${TENANT_ID}`, redirectUri: REDIRECT_URI },
+      cache: { cacheLocation: "localStorage", storeAuthStateInCookie: true },
+      system: { navigateToLoginRequestUrl: false }
     });
-
     const pbiScope = { scopes: ["https://analysis.windows.net/powerbi/api/.default"] };
 
     async function initMsal() {
       await msalInstance.initialize();
-      // Handle the redirect back from AAD (if any)
-      const redirectResp = await msalInstance.handleRedirectPromise().catch((e) => {
-        console.warn("MSAL handleRedirectPromise error:", e);
-        return null;
-      });
-      if (redirectResp?.account) {
-        msalInstance.setActiveAccount(redirectResp.account);
-      } else {
-        // If there's already an account in cache, make it active
-        const accounts = msalInstance.getAllAccounts();
-        if (accounts.length) msalInstance.setActiveAccount(accounts[0]);
+      const resp = await msalInstance.handleRedirectPromise().catch(() => null);
+      if (resp?.account) msalInstance.setActiveAccount(resp.account);
+      else {
+        const accs = msalInstance.getAllAccounts();
+        if (accs.length) msalInstance.setActiveAccount(accs[0]);
       }
     }
-
     async function ensureLoggedIn() {
       await initMsal();
       if (!msalInstance.getActiveAccount()) {
-        // No popup path — redirect only, works in Incognito
         await msalInstance.loginRedirect(pbiScope);
-        return new Promise(() => {}); // halt; browser is navigating
+        return new Promise(()=>{});
       }
     }
-
     async function getAccessToken() {
       await ensureLoggedIn();
       const account = msalInstance.getActiveAccount();
-      // Silent first
       try {
-        const silent = await msalInstance.acquireTokenSilent({ ...pbiScope, account });
-        return silent.accessToken;
-      } catch (e) {
-        // Fall back to redirect token acquisition (no popups)
+        const s = await msalInstance.acquireTokenSilent({ ...pbiScope, account });
+        return s.accessToken;
+      } catch {
         await msalInstance.acquireTokenRedirect({ ...pbiScope, account });
-        return new Promise(() => {}); // halt; browser is navigating
+        return new Promise(()=>{});
       }
     }
 
-    // ======= Power BI embedding =======
+    // ======= Power BI helpers =======
     let report;
 
-    async function embedReport() {
-      const accessToken = await getAccessToken();
+    async function waitRendered(timeoutMs = 15000) {
+      return new Promise((resolve) => {
+        let done = false;
+        const h = () => { if (done) return; done = true; report.off('rendered', h); resolve(); };
+        report.on('rendered', h);
+        setTimeout(() => { if (done) return; done = true; report.off('rendered', h); resolve(); }, timeoutMs);
+      });
+    }
+
+    async function embedInitial() {
+      const token = await getAccessToken();
+      await embedFreshSession(token);
+    }
+
+    async function embedFreshSession(accessToken) {
       const models = window['powerbi-client'].models;
       const host = document.getElementById('host');
 
-      // Reset host container before embedding again
+      // Kill existing iframe/session
       powerbi.reset(host);
+
+      // Cache-bust the URL to avoid any reuse
+      const freshUrl = EMBED_URL + `&v=${Date.now()}`;
 
       const config = {
         type: 'report',
         tokenType: models.TokenType.Aad,
         accessToken,
-        embedUrl: EMBED_URL,
+        embedUrl: freshUrl,
         id: REPORT_ID,
         settings: {
-          panes: { filters: { visible: false }, pageNavigation: { visible: true } },
+          panes: { filters: { visible: false }, pageNavigation: { visible: false } }, // hide tabs
           navContentPaneEnabled: false
         }
       };
 
       report = powerbi.embed(host, config);
       report.on('error', e => console.error('PBI error:', e?.detail ?? e));
-      await report.loaded; // report iframe loaded (not yet rendered)
-      await waitRendered(); // ensure first paint completed
+      await report.loaded;
+      await waitRendered();
     }
 
-    function waitRendered(timeoutMs = 15000) {
-      return new Promise((resolve, reject) => {
-        let done = false;
-        const h = () => {
-          if (done) return;
-          done = true;
-          report.off('rendered', h);
-          resolve();
-        };
-        report.on('rendered', h);
-        // Failsafe timeout
-        setTimeout(() => {
-          if (done) return;
-          done = true;
-          report.off('rendered', h);
-          resolve(); // resolve (don’t reject) to avoid wedging the UI
-        }, timeoutMs);
-      });
-    }
-
-    // ======= State capture / restore (filters + slicers) =======
+    // ======= State capture / restore =======
     async function captureState() {
       const state = { reportFilters: [], slicersByPage: {} };
-      try {
-        state.reportFilters = await report.getFilters();
-      } catch (e) {
-        console.warn("captureState.getFilters failed", e);
-      }
+      try { state.reportFilters = await report.getFilters(); } catch {}
       try {
         const pages = await report.getPages();
         for (const page of pages) {
@@ -178,29 +158,21 @@
             const slicerStates = [];
             for (const v of visuals) {
               if (v.type?.toLowerCase() === 'slicer' && typeof v.getSlicerState === 'function') {
-                try {
-                  const s = await v.getSlicerState();
-                  slicerStates.push({ name: v.name, state: s });
-                } catch (e) { /* ignore individual slicer errors */ }
+                try { slicerStates.push({ name: v.name, state: await v.getSlicerState() }); } catch {}
               }
             }
             if (slicerStates.length) state.slicersByPage[page.name] = slicerStates;
-          } catch (e) { /* ignore page-level errors */ }
+          } catch {}
         }
-      } catch (e) {
-        console.warn("captureState.getPages failed", e);
-      }
+      } catch {}
       return state;
     }
 
     async function restoreState(state) {
       if (!state) return;
-      // Report-level filters
       if (Array.isArray(state.reportFilters) && state.reportFilters.length) {
-        try { await report.setFilters(state.reportFilters); }
-        catch (e) { console.warn("restoreState.setFilters failed", e); }
+        try { await report.setFilters(state.reportFilters); } catch {}
       }
-      // Slicers
       try {
         const pages = await report.getPages();
         for (const page of pages) {
@@ -211,15 +183,12 @@
             for (const saved of slicers) {
               const vis = visuals.find(v => v.name === saved.name);
               if (vis && typeof vis.setSlicerState === 'function') {
-                try { await vis.setSlicerState(saved.state); }
-                catch (e) { /* ignore individual slicer errors */ }
+                try { await vis.setSlicerState(saved.state); } catch {}
               }
             }
-          } catch (e) { /* ignore page-level errors */ }
+          } catch {}
         }
-      } catch (e) {
-        console.warn("restoreState.getPages failed", e);
-      }
+      } catch {}
     }
 
     // ======= Overlay + progress =======
@@ -245,106 +214,84 @@
       });
     }
 
-    // ======= Make webhook (fixed) =======
+    // ======= Make webhook (fire-and-forget) =======
     function triggerMake() {
-      // Avoid CORS preflight by omitting custom headers; send plain text payload.
-      // keepalive helps if the user navigates away (we don’t here, but harmless).
       const payload = JSON.stringify({
         source: 'digital-dispo-report',
         action: 'refresh_request',
+        groupId: GROUP_ID,
+        reportId: REPORT_ID,
         ts: Date.now()
       });
       return fetch(MAKE_WEBHOOK_URL, {
         method: 'POST',
-        mode: 'no-cors',           // opaque response, but delivers reliably to Make
+        mode: 'no-cors',     // opaque; avoids preflight on GitHub Pages
         keepalive: true,
-        body: payload              // defaults to text/plain; no preflight
-      }).catch((e) => {
-        console.warn('Make webhook call failed (caught):', e);
-      });
+        body: payload        // text/plain by default -> no preflight
+      }).catch(()=>{});
     }
 
-    // ======= Refresh flow (stable & stateful) =======
+    // ======= Timer-based refresh with HARD RE-EMBED =======
     async function refreshAndStayOnSamePage() {
-  const withTimeout = (p, ms) =>
-    Promise.race([p, new Promise((_, rej)=> setTimeout(()=>rej(new Error('timeout')), ms))]);
+      const withTimeout = (p, ms) =>
+        Promise.race([p, new Promise((_, rej)=> setTimeout(()=>rej(new Error('timeout')), ms))]);
 
-  try {
-    // 1) Lock UI + show overlay
-    refreshBtn.disabled = true;
-    showOverlay();
-
-    // 2) Kick off the progress bar (we will AWAIT it later)
-    const progressP = animateProgress(REFRESH_DURATION_MS);
-
-    // 3) Fire Make webhook immediately (don’t wait)
-    triggerMake();
-
-    // 4) Begin capturing page + state in parallel while the bar runs
-    const pageP = (async () => {
-      try { const p = await withTimeout(report.getActivePage(), 1500); return {name: p?.name, displayName: p?.displayName}; }
-      catch { return {name: null, displayName: null}; }
-    })();
-
-    const stateP = (async () => {
-      try { return await withTimeout(captureState(), 4000); }
-      catch { return null; }
-    })();
-
-    // 5) Wait for the progress bar to finish (this is your “grace window” for dataset refresh)
-    await progressP;
-
-    // 6) After the grace window, reload the report with a fresh token (more reliable than in-place refresh)
-    let newToken = null;
-    try { newToken = await withTimeout(getAccessToken(), 15000); } catch {}
-    if (newToken) {
-      try { await withTimeout(report.setAccessToken(newToken), 8000); } catch {}
-    }
-
-    try {
-      await withTimeout(report.reload(), 20000);
-      await withTimeout(waitRendered(), 15000);
-    } catch (e) {
-      console.error('reload path failed:', e);
-      // As a last resort, attempt a visual refresh
       try {
-        await withTimeout(report.refresh(), 15000);
-        await withTimeout(waitRendered(), 10000);
-      } catch (e2) { console.error('fallback refresh failed:', e2); }
+        refreshBtn.disabled = true;
+        showOverlay();
+
+        // Start the countdown bar
+        const progressP = animateProgress(REFRESH_DURATION_MS);
+
+        // Fire Make (do not await)
+        triggerMake();
+
+        // Capture current page + filter/slicer state while the bar runs
+        const pageP = (async () => {
+          try { const p = await withTimeout(report.getActivePage(), 1500); return {name: p?.name, displayName: p?.displayName}; }
+          catch { return {name: null, displayName: null}; }
+        })();
+        const stateP = (async () => {
+          try { return await withTimeout(captureState(), 4000); }
+          catch { return null; }
+        })();
+
+        // Wait the fixed timer (we're not polling Make here)
+        await progressP;
+
+        // New token + HARD RE-EMBED (new session + cache-buster)
+        let newToken = null;
+        try { newToken = await withTimeout(getAccessToken(), 15000); } catch {}
+        await embedFreshSession(newToken || (await getAccessToken()));
+
+        // Restore page
+        try {
+          const { name: savedPageName, displayName: savedPageDisplayName } = await pageP;
+          if (savedPageName || savedPageDisplayName) {
+            const pages = await withTimeout(report.getPages(), 4000);
+            const target = pages.find(p => p.name === savedPageName) ||
+                           pages.find(p => p.displayName === savedPageDisplayName);
+            if (target) await withTimeout(target.setActive(), 4000);
+          }
+        } catch {}
+
+        // Restore filters + slicers, then settle
+        try { await withTimeout(restoreState(await stateP), 7000); } catch {}
+        await new Promise(r => setTimeout(r, 400));
+
+      } catch (e) {
+        console.error('Refresh flow error:', e);
+      } finally {
+        setTimeout(() => { hideOverlay(); refreshBtn.disabled = false; }, 200);
+      }
     }
 
-    // 7) Restore page selection
-    try {
-      const { name: savedPageName, displayName: savedPageDisplayName } = await pageP;
-      if (savedPageName || savedPageDisplayName) {
-        const pages = await withTimeout(report.getPages(), 4000);
-        const target = pages.find(p => p.name === savedPageName) ||
-                       pages.find(p => p.displayName === savedPageDisplayName);
-        if (target) await withTimeout(target.setActive(), 4000);
-      }
-    } catch {}
-
-    // 8) Restore filters + slicers, then wait a bit to fully settle
-    try { await withTimeout(restoreState(await stateP), 7000); } catch {}
-    await new Promise(r => setTimeout(r, 800)); // small settle delay to avoid “stuck” feel
-
-  } catch (e) {
-    console.error('Refresh flow error:', e);
-  } finally {
-    // Always close overlay and unlock button
-    setTimeout(() => { hideOverlay(); refreshBtn.disabled = false; }, 200);
-  }
-}
-
-    // ======= Wire up and bootstrap =======
+    // Wire up and bootstrap
     refreshBtn.addEventListener('click', refreshAndStayOnSamePage);
-
-    embedReport().catch(err => {
-      console.error('Embed failed:', err);
+    embedInitial().catch(err => {
+      console.error('Initial embed failed:', err);
       alert('Power BI embed failed. Check console and Azure AD app settings.');
     });
   </script>
 </body>
 </html>
-
-
