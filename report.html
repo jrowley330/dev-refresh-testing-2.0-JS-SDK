@@ -266,78 +266,75 @@
 
     // ======= Refresh flow (stable & stateful) =======
     async function refreshAndStayOnSamePage() {
-      const withTimeout = (p, ms) =>
-        Promise.race([p, new Promise((_, rej)=> setTimeout(()=>rej(new Error('timeout')), ms))]);
+  const withTimeout = (p, ms) =>
+    Promise.race([p, new Promise((_, rej)=> setTimeout(()=>rej(new Error('timeout')), ms))]);
 
-      try {
-        refreshBtn.disabled = true;
-        showOverlay();
+  try {
+    // 1) Lock UI + show overlay
+    refreshBtn.disabled = true;
+    showOverlay();
 
-        // Start overlay animation immediately
-        const progressP = animateProgress(REFRESH_DURATION_MS);
+    // 2) Kick off the progress bar (we will AWAIT it later)
+    const progressP = animateProgress(REFRESH_DURATION_MS);
 
-        // Fire Make webhook right away (non-blocking)
-        triggerMake();
+    // 3) Fire Make webhook immediately (don’t wait)
+    triggerMake();
 
-        // Capture current page + state (best-effort, don’t block too long)
-        let savedPageName = null, savedPageDisplayName = null, savedState = null;
-        try {
-          const active = await withTimeout(report.getActivePage(), 1500);
-          savedPageName = active?.name;
-          savedPageDisplayName = active?.displayName;
-        } catch {}
-        try {
-          // Capture report filters + slicers for restore
-          savedState = await withTimeout(captureState(), 3000);
-        } catch {}
+    // 4) Begin capturing page + state in parallel while the bar runs
+    const pageP = (async () => {
+      try { const p = await withTimeout(report.getActivePage(), 1500); return {name: p?.name, displayName: p?.displayName}; }
+      catch { return {name: null, displayName: null}; }
+    })();
 
-        // Try quick in-place refresh to avoid token churn
-        let refreshed = false;
-        try {
-          await withTimeout(report.refresh(), 15000);
-          await withTimeout(waitRendered(), 10000);
-          refreshed = true;
-        } catch (e) {
-          console.warn('report.refresh() failed/timed out, falling back to reload:', e);
-        }
+    const stateP = (async () => {
+      try { return await withTimeout(captureState(), 4000); }
+      catch { return null; }
+    })();
 
-        // Fallback: renew token and reload
-        if (!refreshed) {
-          try {
-            const newToken = await withTimeout(getAccessToken(), 15000);
-            await withTimeout(report.setAccessToken(newToken), 8000);
-            await withTimeout(report.reload(), 15000);
-            await withTimeout(waitRendered(), 10000);
-          } catch (e) {
-            console.error('reload path failed:', e);
-          }
-        }
+    // 5) Wait for the progress bar to finish (this is your “grace window” for dataset refresh)
+    await progressP;
 
-        // Restore page if known
-        if (savedPageName || savedPageDisplayName) {
-          try {
-            const pages = await withTimeout(report.getPages(), 4000);
-            const target = pages.find(p => p.name === savedPageName) ||
-                           pages.find(p => p.displayName === savedPageDisplayName);
-            if (target) await withTimeout(target.setActive(), 4000);
-          } catch {}
-        }
-
-        // Restore filters + slicers
-        try {
-          await withTimeout(restoreState(savedState), 5000);
-          await withTimeout(waitRendered(), 8000);
-        } catch {}
-
-        // Finish the overlay if still running
-        await progressP;
-
-      } catch (e) {
-        console.error('Refresh flow error:', e);
-      } finally {
-        setTimeout(() => { hideOverlay(); refreshBtn.disabled = false; }, 400);
-      }
+    // 6) After the grace window, reload the report with a fresh token (more reliable than in-place refresh)
+    let newToken = null;
+    try { newToken = await withTimeout(getAccessToken(), 15000); } catch {}
+    if (newToken) {
+      try { await withTimeout(report.setAccessToken(newToken), 8000); } catch {}
     }
+
+    try {
+      await withTimeout(report.reload(), 20000);
+      await withTimeout(waitRendered(), 15000);
+    } catch (e) {
+      console.error('reload path failed:', e);
+      // As a last resort, attempt a visual refresh
+      try {
+        await withTimeout(report.refresh(), 15000);
+        await withTimeout(waitRendered(), 10000);
+      } catch (e2) { console.error('fallback refresh failed:', e2); }
+    }
+
+    // 7) Restore page selection
+    try {
+      const { name: savedPageName, displayName: savedPageDisplayName } = await pageP;
+      if (savedPageName || savedPageDisplayName) {
+        const pages = await withTimeout(report.getPages(), 4000);
+        const target = pages.find(p => p.name === savedPageName) ||
+                       pages.find(p => p.displayName === savedPageDisplayName);
+        if (target) await withTimeout(target.setActive(), 4000);
+      }
+    } catch {}
+
+    // 8) Restore filters + slicers, then wait a bit to fully settle
+    try { await withTimeout(restoreState(await stateP), 7000); } catch {}
+    await new Promise(r => setTimeout(r, 800)); // small settle delay to avoid “stuck” feel
+
+  } catch (e) {
+    console.error('Refresh flow error:', e);
+  } finally {
+    // Always close overlay and unlock button
+    setTimeout(() => { hideOverlay(); refreshBtn.disabled = false; }, 200);
+  }
+}
 
     // ======= Wire up and bootstrap =======
     refreshBtn.addEventListener('click', refreshAndStayOnSamePage);
