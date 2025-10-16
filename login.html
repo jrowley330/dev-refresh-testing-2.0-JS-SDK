@@ -1,94 +1,144 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Login to Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body {
-      font-family: sans-serif;
-      text-align: center;
-      padding: 100px;
-      background-color: #000;
-      color: #fff;
+    :root{
+      --bg1:#0b0f1a; --bg2:#0a0a0a; --glow:#2c66ff; --brand:#1e78ff; --brand-2:#00bcd4;
+      --card:#10131a; --text:#f6f7fb; --muted:#a8b0c2; --bar:#00bcd4; --outline:rgba(255,255,255,.08);
     }
+    *{box-sizing:border-box}
+    html,body{height:100%; margin:0; background:radial-gradient(1200px 600px at 20% -10%, rgba(46,116,255,.25), transparent),
+                                     radial-gradient(1000px 500px at 120% 120%, rgba(0,188,212,.22), transparent),
+                                     linear-gradient(180deg, var(--bg1), var(--bg2));
+              color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+              overflow:hidden;}
+    .shell{height:100%; display:grid; place-items:center; padding:28px;}
+    .card{
+      width:min(560px,92vw);
+      background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+      border:1px solid var(--outline);
+      border-radius:18px; padding:36px 28px 28px;
+      box-shadow:0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.02) inset;
+      position:relative; overflow:hidden;
+    }
+    .card:before{
+      content:""; position:absolute; inset:-1px;
+      background:radial-gradient(600px 200px at -10% 0%, rgba(30,120,255,.25), transparent 65%),
+                 radial-gradient(500px 300px at 120% 140%, rgba(0,188,212,.22), transparent 60%);
+      pointer-events:none; filter:blur(20px); opacity:.6;
+    }
+    .logo{
+      width:56px; height:56px; border-radius:14px; display:grid; place-items:center;
+      background:linear-gradient(135deg, rgba(46,116,255,.35), rgba(0,188,212,.35));
+      border:1px solid var(--outline);
+      box-shadow:0 10px 30px rgba(0,0,0,.35);
+      margin:0 auto 14px auto;
+    }
+    .logo svg{width:30px; height:30px; opacity:.92}
+    h1{margin:6px 0 6px 0; text-align:center; font-weight:700; letter-spacing:.3px; font-size:clamp(24px,3.5vw,34px)}
+    .sub{margin:0 0 26px 0; text-align:center; color:var(--muted); font-size:clamp(13px,2.6vw,15px)}
+    .actions{display:flex; justify-content:center; gap:12px; margin:8px 0 20px 0}
+    .btn{
+      --pad:14px 22px;
+      background:linear-gradient(180deg, var(--brand), #0f5fd6);
+      color:#fff; border:0; padding:var(--pad); border-radius:12px; font-size:16px; font-weight:600;
+      cursor:pointer; box-shadow:0 10px 30px rgba(30,120,255,.35), 0 0 0 1px rgba(255,255,255,.06) inset;
+      transition:transform .08s ease, box-shadow .2s ease, filter .2s ease;
+    }
+    .btn:hover{filter:brightness(1.05)}
+    .btn:active{transform:translateY(1px)}
+    .btn:disabled{opacity:.6; cursor:not-allowed}
 
-    button {
-      padding: 14px 28px;
-      font-size: 18px;
-      cursor: pointer;
-      background-color: #007bff;
-      color: white;
-      border: none;
-      border-radius: 6px;
-    }
+    .progress-wrap{width:100%; background:#141922; border-radius:12px; overflow:hidden; height:14px;
+                   border:1px solid var(--outline)}
+    .progress-bar{width:0%; height:100%; background:linear-gradient(90deg, var(--bar), #36d6ee);
+                  box-shadow:0 0 22px rgba(0,188,212,.45) inset}
+    .eta{margin:10px 0 0; text-align:center; font-size:13px; color:var(--muted)}
+    .hide{display:none}
 
-    #loading {
-      display: none;
-      font-size: 20px;
-      margin-top: 30px;
-    }
-
-    #progress-container {
-      display: none;
-      width: 80%;
-      margin: 30px auto;
-      background: #333;
-      border-radius: 10px;
-      overflow: hidden;
-      height: 24px;
-    }
-
-    #progress-bar {
-      width: 0%;
-      height: 100%;
-      background-color: #00bcd4;
-      transition: width 0.25s linear;
-    }
+    /* Decorative animated orbs (lightweight) */
+    .orb{position:absolute; border-radius:50%; filter:blur(40px); opacity:.28; pointer-events:none}
+    .orb.one{width:160px; height:160px; left:-40px; top:-40px; background:#2e74ff; animation:float 10s ease-in-out infinite}
+    .orb.two{width:180px; height:180px; right:-50px; bottom:-60px; background:#00bcd4; animation:float 12s ease-in-out infinite reverse}
+    @keyframes float{0%,100%{transform:translateY(0) translateX(0)} 50%{transform:translateY(10px) translateX(6px)}}
   </style>
 </head>
 <body>
-  <h1>Welcome to Digital Dispo</h1>
-  <button id="login-btn">Login to Dashboard</button>
-  <div id="loading">Refreshing report... Please wait ⏳</div>
+  <div class="shell">
+    <div class="card" role="group" aria-label="Login Card">
+      <div class="orb one"></div><div class="orb two"></div>
+      <div class="logo" aria-hidden="true">
+        <!-- simple spark icon -->
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 2l1.9 4.6L18 8l-4.1 1.4L12 14l-1.9-4.6L6 8l4.1-1.4L12 2z" fill="#ffffff"/></svg>
+      </div>
+      <h1>Welcome to <span style="text-shadow:0 0 22px rgba(44,102,255,.35)">Digital Dispo</span></h1>
+      <p class="sub">Authenticate to continue to your dashboard.</p>
 
-  <div id="progress-container">
-    <div id="progress-bar"></div>
+      <div class="actions">
+        <button id="login-btn" class="btn">Login to Dashboard</button>
+      </div>
+
+      <div id="loading" class="eta hide">Refreshing report… please wait</div>
+      <div id="progress-container" class="progress-wrap hide" aria-hidden="true" aria-label="Loading progress">
+        <div id="progress-bar" class="progress-bar"></div>
+      </div>
+      <div id="eta" class="eta hide">~30s remaining</div>
+    </div>
   </div>
 
   <script>
-  document.getElementById('login-btn').addEventListener('click', function () {
-    // Hide button, show loading UI
-    document.getElementById('login-btn').style.display = 'none';
-    document.getElementById('loading').style.display = 'block';
-    document.getElementById('progress-container').style.display = 'block';
+    // ---- config ----
+    const DURATION_MS = 30000; // change to 45000/60000 if you want
+    const WEBHOOK_URL = 'https://hook.us2.make.com/vchvhpyeukqgd5tyl6o3r1wf6cstb4j8';
 
-    // Trigger Make.com webhook
-    fetch('https://hook.us2.make.com/vchvhpyeukqgd5tyl6o3r1wf6cstb4j8', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({key: 'siteload' }) // optional payload
+    // ---- elements ----
+    const btn   = document.getElementById('login-btn');
+    const load  = document.getElementById('loading');
+    const wrap  = document.getElementById('progress-container');
+    const bar   = document.getElementById('progress-bar');
+    const etaEl = document.getElementById('eta');
+
+    // Keyboard: Enter triggers button
+    document.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && !btn.disabled) { btn.click(); }
     });
 
-    // Animate progress bar over 30 seconds
-    const progressBar = document.getElementById('progress-bar');
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += 100 / 120; // ~0.83% every 250ms for 30s
-      if (progress >= 100) {
-        progressBar.style.width = '100%';
-        clearInterval(interval);
-      } else {
-        progressBar.style.width = progress + '%';
-      }
-    }, 250);
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      btn.textContent = 'Starting…';
+      load.classList.remove('hide');
+      wrap.classList.remove('hide');
+      etaEl.classList.remove('hide');
 
-    // After 30 seconds, redirect
-    setTimeout(() => {
-      window.location.href = 'report.html';
-    }, 30000);
-  });
-</script>
+      // Try normal JSON POST first; if it errors (CORS), fall back to no-cors fire-and-forget
+      fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'siteload' })
+      }).catch(() => {
+        // fallback
+        fetch(WEBHOOK_URL, { method:'POST', mode:'no-cors', keepalive:true, body: '{"key":"siteload"}' });
+      });
+
+      // Smooth, drift-free progress using rAF vs setInterval
+      const start = performance.now();
+      const tick = (now) => {
+        const elapsed = now - start;
+        const pct = Math.min(1, elapsed / DURATION_MS);
+        bar.style.width = (pct * 100).toFixed(2) + '%';
+        const remain = Math.max(0, Math.ceil((DURATION_MS - elapsed) / 1000));
+        etaEl.textContent = `~${remain}s remaining`;
+        if (pct < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+
+      // Redirect after the timer completes
+      setTimeout(() => { window.location.href = 'report.html'; }, DURATION_MS);
+    });
+  </script>
 </body>
 </html>
+
